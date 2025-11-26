@@ -1,471 +1,214 @@
-// viewer.js
-// ===============================================
-// Video.js – HLS přehrávač pro diváka + "login" + /stats
-// + WebRTC příjem (P2P s presenterem)
-// ===============================================
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>MDS – Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
 
-let player = null;
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script type="module" src="https://cdn.jsdelivr.net/npm/hls-video-element@1.2/+esm"></script>
 
-// HTML prvky – HLS
-const playBtn        = document.getElementById("playBtn");
-const stopBtn        = document.getElementById("stopBtn");
-const streamSelect   = document.getElementById("streamSelect");
-const presenterList  = document.getElementById("presenterList");
-
-const btnLive        = document.getElementById("btnLive");
-const btnBack30      = document.getElementById("btnBack30");
-const btnBack5min    = document.getElementById("btnBack5min");
-
-const qualitySelect  = document.getElementById("qualitySelect");
-const qualityLabel   = document.getElementById("qualityLabel");
-const errorBox       = document.getElementById("viewerError");
-
-// Login prvky
-const viewerNameInput = document.getElementById("viewerName");
-const viewerCodeInput = document.getElementById("viewerCode");
-const joinBtn         = document.getElementById("joinBtn");
-const loginError      = document.getElementById("loginError");
-const viewerStatus    = document.getElementById("viewerStatus");
-
-// WebRTC – remote video
-const webrtcRemoteVideo = document.getElementById("webrtcRemote");
-
-// Jednoduchý "tajný" kód pro demo
-const ROOM_CODE = "mds2025";
-//let isAuthorized = false;
-let isAuthorized = true;    // pro snadné testování bez loginu
-
-// WebRTC
-let ws = null;
-let pc = null;
-const SIGNALING_URL = 'ws://localhost:3000';
-const ICE_SERVERS = [
-    { urls: 'stun:stun.l.google.com:19302' }
-];
-
-// ===============================================
-// Video.js inicializace
-// ===============================================
-function initPlayer() {
-    if (player) return player;
-
-    player = videojs("viewerVideo", {
-        autoplay: false,
-        controls: true,
-        liveui: true,
-        preload: "auto",
-        html5: {
-            vhs: {
-                enableLowInitialPlaylist: true
-            }
+    <style>
+        body {
+            background: #0f172a; /* dark navy */
+            color: #e5e7eb;
         }
-    });
-
-    return player;
-}
-
-function setControlsEnabled(enabled) {
-    if (playBtn)       playBtn.disabled       = !enabled;
-    if (stopBtn)       stopBtn.disabled       = !enabled;
-    if (streamSelect)  streamSelect.disabled  = !enabled;
-    if (btnLive)       btnLive.disabled       = !enabled;
-    if (btnBack30)     btnBack30.disabled     = !enabled;
-    if (btnBack5min)   btnBack5min.disabled   = !enabled;
-    if (qualitySelect) qualitySelect.disabled = !enabled;
-}
-
-// defaultně zamknout ovládání streamu
-setControlsEnabled(false);
-
-// ===============================================
-// Login logika
-// ===============================================
-function updateViewerStatus(name) {
-    if (!viewerStatus) return;
-    if (!isAuthorized) {
-        viewerStatus.textContent = "Nepřihlášen";
-        viewerStatus.className = "badge bg-secondary";
-    } else {
-        viewerStatus.textContent = `Přihlášen: ${name || "divák"}`;
-        viewerStatus.className = "badge bg-success";
-    }
-}
-
-// Zkus načíst jméno z localStorage
-(function restoreViewerName() {
-    const savedName = window.localStorage.getItem("viewerName");
-    if (savedName && viewerNameInput) {
-        viewerNameInput.value = savedName;
-    }
-})();
-
-function connectSignaling() {
-    console.log("Viewer: connectSignaling() → connectWebRTCViewer()");
-    connectWebRTCViewer();
-}
-
-function handleJoin() {
-    if (!viewerNameInput || !viewerCodeInput || !joinBtn) return;
-
-    const name = viewerNameInput.value.trim();
-    const code = viewerCodeInput.value.trim();
-
-    if (!name) {
-        loginError.textContent = "Zadej, prosím, své jméno.";
-        return;
-    }
-    if (!code) {
-        loginError.textContent = "Zadej kód místnosti.";
-        return;
-    }
-    if (code !== ROOM_CODE) {
-        loginError.textContent = "Neplatný kód (správný je mds2025).";
-        return;
-    }
-
-    isAuthorized = true;
-    loginError.textContent = "";
-    setControlsEnabled(true);
-    updateViewerStatus(name);
-
-    try {
-        window.localStorage.setItem("viewerName", name);
-    } catch (e) {
-        console.warn("Nepodařilo se uložit jméno do localStorage:", e);
-    }
-
-    // Po úspěšném "loginu" navážeme WebRTC signaling
-    connectSignaling();
-}
-
-if (joinBtn) {
-    joinBtn.addEventListener("click", handleJoin);
-}
-
-// ===============================================
-// Start / stop přehrávání HLS
-// ===============================================
-function getSelectedUrl() {
-    if (!streamSelect) {
-        return "/hls/master.m3u8";
-    }
-    return streamSelect.value === "single"
-        ? "/hls/stream.m3u8"
-        : "/hls/master.m3u8";
-}
-
-function startPlayback() {
-    if (!isAuthorized) {
-        if (loginError) {
-            loginError.textContent = "Nejdřív se přihlas (jméno + kód).";
+        .navbar {
+            box-shadow: 0 2px 6px rgba(0,0,0,0.5);
         }
-        return;
-    }
-
-    const url = getSelectedUrl();
-    const p = initPlayer();
-    errorBox.textContent = "";
-
-    p.src({
-        src: url,
-        type: "application/x-mpegURL"
-    });
-
-    p.play().catch(err => {
-        console.error("Chyba při přehrávání:", err);
-        errorBox.textContent = "Nepodařilo se spustit přehrávání.";
-    });
-}
-
-function stopPlayback() {
-    if (!player) return;
-    try {
-        player.pause();
-        player.src({ src: "", type: "" });
-    } catch (e) {
-        console.warn("Chyba při zastavení:", e);
-    }
-}
-
-// ===============================================
-// DVR – LIVE, -30s, -5min + zpoždění
-// ===============================================
-function updateDelayLabel() {
-    if (!player || !qualityLabel) return;
-
-    const seekable = player.seekable();
-    if (!seekable || seekable.length === 0) {
-        qualityLabel.textContent = "(čekám na stream…)";
-        return;
-    }
-
-    const livePos   = seekable.end(seekable.length - 1);
-    const cur       = player.currentTime();
-    const delay     = livePos - cur;
-
-    if (!Number.isFinite(delay)) {
-        qualityLabel.textContent = "(čekám na stream…)";
-        return;
-    }
-
-    qualityLabel.textContent = `Zpoždění ~ ${delay.toFixed(1)} s`;
-}
-
-// voláme každou vteřinu
-setInterval(updateDelayLabel, 1000);
-
-function seekRelative(seconds) {
-    if (!player) return;
-    try {
-        const current = player.currentTime() || 0;
-        const target  = Math.max(0, current + seconds);
-        player.currentTime(target);
-    } catch (e) {
-        console.error("seekRelative error", e);
-    }
-}
-
-function jumpToLive() {
-    if (!player) return;
-    try {
-        const seekable = player.seekable();
-        if (!seekable || seekable.length === 0) return;
-        const livePos = seekable.end(seekable.length - 1);
-        player.currentTime(Math.max(0, livePos - 1));
-    } catch (e) {
-        console.error("jumpToLive error", e);
-    }
-}
-
-if (btnBack30) {
-    btnBack30.addEventListener("click", () => seekRelative(-30));
-}
-if (btnBack5min) {
-    btnBack5min.addEventListener("click", () => seekRelative(-300));
-}
-if (btnLive) {
-    btnLive.addEventListener("click", jumpToLive);
-}
-
-// qualitySelect – zatím jen placeholder
-if (qualitySelect) {
-    qualitySelect.value = "auto";
-    qualitySelect.addEventListener("change", () => {
-        // Manuální přepínání kvality bychom museli řešit přes Hls.js / VHS API.
-    });
-}
-
-// ===============================================
-// Panel přednášejících – /stats z Nginx
-// ===============================================
-const PRESENTER_NAMES = {
-    cam1: "Martin",
-    cam2: "Přednášející 2",
-    cam3: "Přednášející 3",
-    cam4: "Přednášející 4",
-    cam5: "Přednášející 5",
-    cam6: "Přednášející 6"
-};
-
-function parseCamsFromStats(xmlText) {
-    if (!xmlText) return [];
-    const regex = /<stream>[\s\S]*?<name>(.*?)<\/name>[\s\S]*?<\/stream>/g;
-    const cams = [];
-    let match;
-    while ((match = regex.exec(xmlText)) !== null) {
-        const name = match[1].trim();
-        if (/^cam[1-6]$/.test(name)) {
-            cams.push(name);
+        .card {
+            box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+            border-radius: 1rem;
+            border: 1px solid #1e293b;
+            background: #020617;
+            color: #e5e7eb;
         }
-    }
-    return cams;
-}
-
-async function refreshPresenters() {
-    if (!presenterList) return;
-    try {
-        const res  = await fetch("/stats", { cache: "no-store" });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const text = await res.text();
-        const cams = parseCamsFromStats(text);
-
-        presenterList.innerHTML = "";
-
-        if (!cams.length) {
-            presenterList.innerHTML = "<div class='text-muted small'>Žádné aktivní kamery.</div>";
-            return;
+        .card-header {
+            border-radius: 1rem 1rem 0 0 !important;
+            background: #020617;
+            border-bottom: 1px solid #1e293b;
         }
-
-        cams.forEach(cam => {
-            const div  = document.createElement("div");
-            const dot  = document.createElement("span");
-            const span = document.createElement("span");
-
-            dot.className  = "presenter-badge";
-            span.textContent = PRESENTER_NAMES[cam] || cam;
-
-            div.appendChild(dot);
-            div.appendChild(span);
-
-            presenterList.appendChild(div);
-        });
-    } catch (err) {
-        presenterList.innerHTML =
-            "<div class='text-muted small'>/stats není k dispozici (není nutné pro přehrávání).</div>";
-    }
-}
-
-function startPresenterPolling() {
-    refreshPresenters();
-    setInterval(refreshPresenters, 5000);
-}
-startPresenterPolling();
-
-// ===============================================
-// WebRTC – přímé spojení s presenterem
-// ===============================================
-
-const webrtcVideo = document.getElementById("webrtcPlayer");
-
-let wrtcSocket = null;
-let wrtcPeer = null;
-
-function createViewerPeer() {
-    const pc = new RTCPeerConnection({
-        iceServers: [
-            { urls: "stun:stun.l.google.com:19302" }
-        ]
-    });
-
-    pc.ontrack = (event) => {
-    console.log("Viewer: přišel remote track");
-    const [stream] = event.streams;
-    if (webrtcVideo) {
-        webrtcVideo.srcObject = stream;
-        webrtcVideo.play().catch(() => {});
-    }
-};
-
-    pc.onicecandidate = (event) => {
-        if (event.candidate && wrtcSocket && wrtcSocket.readyState === WebSocket.OPEN) {
-            wrtcSocket.send(JSON.stringify({
-                type: "ice",
-                target: "viewer",
-                candidate: event.candidate
-            }));
+        .vjs-control-bar {
+            font-size: 14px !important;
         }
-    };
-
-    pc.onconnectionstatechange = () => {
-        console.log("Viewer RTC: connection state =", pc.connectionState);
-    };
-
-    return pc;
-}
-
-function connectWebRTCViewer() {
-    if (!webrtcVideo) {
-        console.warn("Viewer RTC: nenašel jsem <video id=\"webrtcPlayer\">");
-        return;
-    }
-
-    wrtcSocket = new WebSocket("ws://localhost:3000");
-
-    wrtcSocket.onopen = () => {
-        console.log("Viewer WS: připojeno k signaling serveru");
-        wrtcSocket.send(JSON.stringify({ type: "join", role: "viewer" }));
-        console.log("Viewer WS: joined as viewer");
-    };
-
-    wrtcSocket.onmessage = async (event) => {
-        let msg;
-        try {
-            msg = JSON.parse(event.data);
-        } catch (e) {
-            console.error("Viewer WS: neplatný JSON", event.data);
-            return;
+        #qualityLabel {
+            font-size: 0.9rem;
+            color: #9ca3af;
         }
-        if (msg.type === "offer") {
-    console.log("Viewer: přišla OFFER");
-    if (!wrtcPeer) wrtcPeer = createViewerPeer();
-
-    await wrtcPeer.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-    const answer = await wrtcPeer.createAnswer();
-    await wrtcPeer.setLocalDescription(answer);
-
-    wrtcSocket.send(JSON.stringify({
-        type: "answer",
-        sdp: answer
-    }));
-}
-
-if (msg.type === "ice") {
-    console.log("Viewer: ICE od presentera");
-    if (wrtcPeer && msg.candidate) {
-        wrtcPeer.addIceCandidate(msg.candidate);
-    }
-}
-
-
-        switch (msg.type) {
-            case "presenter-ready":
-                console.log("Viewer WS: presenter-ready");
-                break;
-
-            case "offer":
-                console.log("Viewer WS: dorazila offer");
-                if (!wrtcPeer) {
-                    wrtcPeer = createViewerPeer();
-                }
-                try {
-                    await wrtcPeer.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-                    const answer = await wrtcPeer.createAnswer();
-                    await wrtcPeer.setLocalDescription(answer);
-
-                    wrtcSocket.send(JSON.stringify({
-                        type: "answer",
-                        sdp: answer
-                    }));
-                    console.log("Viewer WS: answer odeslána");
-                } catch (err) {
-                    console.error("Viewer RTC: chyba při zpracování offer/answer", err);
-                }
-                break;
-
-            case "ice-candidate":
-                if (wrtcPeer && msg.candidate) {
-                    try {
-                        await wrtcPeer.addIceCandidate(new RTCIceCandidate(msg.candidate));
-                    } catch (err) {
-                        console.error("Viewer RTC: chyba addIceCandidate", err);
-                    }
-                }
-                break;
-
-            case "presenter-gone":
-                console.log("Viewer WS: presenter-gone, čistím peer");
-                if (wrtcPeer) {
-                    wrtcPeer.close();
-                    wrtcPeer = null;
-                }
-                if (webrtcVideo) webrtcVideo.srcObject = null;
-                break;
-
-            default:
-                // jiné typy ignorujeme
-                break;
+        .presenter-badge {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: #22c55e;
+            display: inline-block;
+            margin-right: 6px;
         }
-    };
+        .monospace {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
+    </style>
+</head>
 
-    wrtcSocket.onclose = () => {
-        console.log("Viewer WS: spojení uzavřeno");
-    };
+<body>
 
-    wrtcSocket.onerror = (err) => {
-        console.error("Viewer WS: chyba", err);
-    };
-}
+<nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container-fluid">
+        <span class="navbar-brand mb-0 h1">MDS – Divák</span>
+        <span id="viewerStatus" class="badge bg-secondary">Nepřihlášen</span>
+    </div>
+</nav>
 
-if (webrtcVideo) {
-    connectWebRTCViewer();
-}
+<div class="container">
+
+    <div class="row">
+        <!-- Player card -->
+        <div class="col-lg-8 mb-4">
+            <div class="card p-3">
+
+                <h4 class="mb-3">Živý stream</h4>
+
+                <media-controller>
+                <hls-video
+                    src="http://localhost:8081/hls/master.m3u8"
+                    slot="media"
+                    crossorigin
+                    muted
+                ></hls-video>
+                <media-loading-indicator slot="centered-chrome" noautohide></media-loading-indicator>
+                <media-control-bar>
+                    <media-play-button></media-play-button>
+                    <media-seek-backward-button></media-seek-backward-button>
+                    <media-seek-forward-button ></media-seek-forward-button>
+                    <media-mute-button></media-mute-button>
+                    <media-volume-range></media-volume-range>
+                    <media-time-range></media-time-range>
+                    <media-time-display showduration remaining></media-time-display>
+                    <media-playback-rate-button></media-playback-rate-button>
+                    <media-fullscreen-button></media-fullscreen-button>
+                </media-control-bar>
+                </media-controller>
+
+                <div class="mt-3">
+                    <div class="d-flex justify-content-between align-items-center">
+
+                        <div>
+                            <button id="btnLive" class="btn btn-danger btn-sm">ŽIVĚ</button>
+                            <button id="btnBack30" class="btn btn-secondary btn-sm">⏪ -30s</button>
+                            <button id="btnBack5min" class="btn btn-secondary btn-sm">⏪ -5min</button>
+                        </div>
+
+                        <div class="d-flex align-items-center">
+                            <label class="me-2">Kvalita:</label>
+                            <select id="qualitySelect" class="form-select form-select-sm" style="width: 110px;">
+                                <option value="auto">Auto</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="qualityLabel" class="mt-2">(čekám na stream…)</div>
+                    <div id="viewerError" class="text-danger mt-2"></div>
+                </div>
+
+            </div>
+        </div>
+
+        <div class="card p-3 mt-4">
+            <h5>WebRTC (přímé spojení s presenterem)</h5>
+                <p class="small text-muted">
+                    Toto je separátní demo: video jde přímo z <b>presentera</b> do <b>viewera</b> (WebRTC).
+                </p>
+
+                <video
+                    id="webrtcPlayer"
+                    autoplay
+                    playsinline
+                    controls
+                    style="width: 100%; max-width: 640px; background: #000;"
+                ></video>
+
+                <p class="small text-muted mt-2">
+                    Připojení se naváže po přihlášení diváka a spuštění náhledu na stránce presentera.
+                </p>
+        </div>
+
+        <!-- Pravý sloupec: login + seznam přednášejících + nastavení streamu -->
+        <div class="col-lg-4">
+
+            <!-- „Login“ diváka -->
+            <div class="card p-3 mb-4">
+                <h5>Přihlášení diváka</h5>
+                <div class="mb-3">
+                    <label class="form-label">Jméno:</label>
+                    <input id="viewerName" type="text" class="form-control" placeholder="Např. Martin">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Kód místnosti:</label>
+                    <input id="viewerCode" type="password" class="form-control" placeholder="Např. mds2025">
+                    <div class="form-text text-muted">Demo kód: <span class="monospace">mds2025</span></div>
+                </div>
+                <button id="joinBtn" class="btn btn-primary w-100">Přihlásit</button>
+                <div id="loginError" class="text-danger small mt-2"></div>
+            </div>
+                    <!-- WebRTC P2P náhled (demo) -->
+            <div class="col-lg-8 mb-4">
+                <div class="card p-3 mt-2">
+                    <h4 class="mb-3">WebRTC (přímé spojení s presenterem)</h4>
+                    <p class="small text-muted mb-2">
+                        Toto je separátní demo: video jde přímo z <strong>presentera</strong> do <strong>viewera</strong> (WebRTC).
+                        HLS výše je přes Nginx/FFmpeg.
+                    </p>
+                    <video id="webrtcRemote"
+                        class="w-100 rounded"
+                        playsinline
+                        autoplay
+                        controls></video>
+                    <div class="mt-2 small text-muted">
+                        Připojení se naváže po přihlášení diváka a připojení presentera.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Přednášející -->
+            <div class="card p-3 mb-4">
+                <h5>Přednášející (podle /stats)</h5>
+                <div id="presenterList" class="mt-2 small">
+                    (Čekám na data ze /stats…)
+                </div>
+            </div>
+
+            <!-- Nastavení streamu -->
+            <div class="card p-3">
+                <h5>Nastavení streamu</h5>
+
+                <div class="mt-3">
+                    <label class="form-label">Zdroj streamu:</label>
+                    <select id="streamSelect" class="form-select">
+                        <option value="multi">Multi (master.m3u8)</option>
+                        <option value="single">Single (stream.m3u8)</option>
+                    </select>
+                </div>
+
+                <button id="playBtn" class="btn btn-success mt-3 w-100">Přehrát</button>
+                <button id="stopBtn" class="btn btn-outline-danger mt-2 w-100">Stop</button>
+            </div>
+        </div>
+
+    </div>
+
+</div>
+
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- Video.js -->
+<script src="https://vjs.zencdn.net/8.10.0/video.min.js"></script>
+
+<!-- Hls.js (klidně tu může zůstat, i když aktuální kód ho přímo nepoužívá) -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+
+<!-- Tvůj JS -->
+<script src="./viewer.js"></script>
+
+</body>
+</html>
