@@ -1,0 +1,47 @@
+Jak si to můžeš otestovat?
+
+- vše dělej ve složce /nginx
+
+1. terminál -> NGINX.exe
+2. spusť přes ffmpegy kamery simulující "reálné kamery" (příkazy hned pod FAZE 4:), vždy si přepiš jen nakonci camX <- číslo max. 6, každá kamera - vlastní terminál
+3. spusť node grind-controller
+4. spusť ffmpeg příkaz na hls (ten dlouhý)
+
+	- 3. a 4. krok je možná prohozený, teď přesně nevím
+5. najeď na http://localhost a tam je tlačítko něco jako spusť multi, tak tam to jde vidět
+
+Teď se bude hlavně dávat všechno dohromady - viz 5. fáze návrhu AI
+pokud něco uděláte - push na vedlejší branch! NIKDY na main - tam jen funkční a jisté změny prosím, popř. pokud jste si jistí, dejte merge těchto branchů
+PS: možná si budete muset stáhnout node a video.js k sobě, aby vám to jelo, ale uvidíte co vám vyhodí konzole
+PS2: jak budete něco pushovat vyčistěte složku nginx/temp/tmp_hls - zde se ukládají soubory přenosu! tak ať to nemá 40 gb, dík
+PS3: ve složce media jsou 3 testovací videa, aby tam byl různorodost -> bacha na uši při přehrávání na localhostu xd
+
+FAZE 3:
+
+ffmpeg -re -stream_loop -1 -i ..\media\test.mp4 -c:v libx264 -preset veryfast -c:a aac -ar 48000 -ac 2 -f flv rtmp://localhost:1936/live/stream
+
+ffmpeg -i rtmp://localhost:1936/live/stream -c:v libx264 -preset veryfast -c:a aac -ar 48000 -ac 2 -f hls -hls_time 4 -hls_playlist_type event -hls_segment_filename "site/hls/stream_%03d.ts" site/hls/stream.m3u8
+
+FAZE 4:
+
+ffmpeg -re -stream_loop -1 -i ../media/test.mp4 -c:v libx264 -preset veryfast -b:v 2500k -c:a aac -ar 48000 -ac 2 -f flv rtmp://localhost:1936/live/cam1
+	- stream na rtmp://localhost:1936/live/cam1
+
+ffmpeg -re -stream_loop -1 -i ../media/test2.mp4 -c:v libx264 -preset veryfast -b:v 2500k -c:a aac -ar 48000 -ac 2 -f flv rtmp://localhost:1936/live/cam2
+	- stream na rtmp://localhost:1936/live/cam2
+
+ffmpeg -i rtmp://localhost:1936/final/257148 -filter_complex "[0:v]split=3[v720][v480][v360];[v720]scale=1280:720[v720out];[v480]scale=854:480[v480out];[v360]scale=640:360[v360out]" -map "[v720out]" -map 0:a -map "[v480out]" -map 0:a -map "[v360out]" -map 0:a -c:v:0 libx264 -preset veryfast -pix_fmt yuv420p -b:v:0 2800k -maxrate:v:0 2996k -bufsize:v:0 4200k -c:v:1 libx264 -preset veryfast -pix_fmt yuv420p -b:v:1 1600k -maxrate:v:1 1712k -bufsize:v:1 2400k -c:v:2 libx264 -preset veryfast -pix_fmt yuv420p -b:v:2 800k  -maxrate:v:2 856k  -bufsize:v:2 1200k -c:a:0 aac -b:a:0 128k -c:a:1 aac -b:a:1 128k -c:a:2 aac -b:a:2 96k -f hls -hls_time 4 -hls_playlist_type event -hls_segment_filename "temp/tmp_hls/multi_v%v_%03d.ts" -master_pl_name master.m3u8 -var_stream_map "v:0,a:0 v:1,a:1 v:2,a:2" temp/tmp_hls/multi_v%v.m3u8
+
+FAZE 5:
+
+pokud se vam videa sekaji, není to problém špatné konfigurace a vytížení sítě přes ffmpeg - spouští se jich mnoho, zkuste přehodit ffmpegy kamer na GPU, pokud máte silné
+ + jsem zlevnil enkodování na menší zátež (libx264)
+
+
+//zlevněné encoding
+ffmpeg -re -stream_loop -1 -i ../media/test.mp4 -vf "scale=1280:-1" -c:v libx264 -preset ultrafast -b:v 2000k -maxrate 2000k -bufsize 4000k -c:a aac -ar 48000 -ac 2 -b:a 128k -f flv rtmp://localhost:1936/live/cam1
+
+//zlevnění+GPU zátěž namísto CPU !POZOR - funguje myslím jen na AMD grafikách (h264_amf)
+ffmpeg -re -stream_loop -1 -i ../media/test.mp4 -vf "scale=1280:-1" -c:v h264_amf -b:v 2500k -maxrate 2500k -bufsize 5000k -c:a aac -ar 48000 -ac 2 -b:a 128k -f flv rtmp://localhost:1936/live/cam1
+
+ono se to stejně bude sekat, ale stejně nakonci budeme přenášet kamery a ne nějaké test videa žejo

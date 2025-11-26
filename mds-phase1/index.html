@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="cs">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>MDS – Fáze 1 (náhled kamery a mikrofonu)</title>
+    <style>
+        :root { --gap:16px; }
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; color: #222; }
+        h1 { margin: 0 0 8px; }
+        p { margin: 0 0 12px; }
+        .row { display: flex; gap: var(--gap); align-items: center; flex-wrap: wrap; margin: 12px 0; }
+        label { font-size: 14px; color: #333; display: flex; flex-direction: column; gap: 6px; }
+        input, select, button { padding: 8px 10px; font-size: 14px; }
+        button { border-radius: 8px; border: 1px solid #ddd; background: #fafafa; cursor: pointer; }
+        button:disabled { opacity: .6; cursor: not-allowed; }
+        video { width: 100%; max-width: 720px; background: #000; border-radius: 10px; }
+        .pill { padding: 4px 10px; border-radius: 999px; background: #efefef; font-size: 12px; }
+        .ok { color: #0a7; }
+        .danger { color: #b00020; }
+        .vu-wrap { width: 320px; height: 10px; background:#eee; border-radius: 6px; overflow: hidden; }
+        .vu-bar { height: 100%; width: 0; background: #4caf50; transition: width .06s linear; }
+	.video-wrapper { display: inline-block; padding: 6px; border-radius: 14px; transition: box-shadow 0.15s ease-out; margin-top: 20px; }
+	.video-wrapper.active { box-shadow: 0 0 18px 4px #4caf50; }
+    </style>
+</head>
+<body>
+<h1>MDS – Fáze 1</h1>
+<p>Lokální náhled z <b>kamery</b> a <b>mikrofonu</b> přes <code>MediaStream API</code> s monitorem zvuku a VU metrem. Zatím nic neposíláme na server.</p>
+
+<div class="row">
+    <label>Jméno publikujícího
+        <input id="displayName" type="text" placeholder="Např. Jan Novák" />
+    </label>
+
+    <label>Kamera
+        <select id="videoSelect"></select>
+    </label>
+
+    <label>Mikrofon
+        <select id="audioSelect"></select>
+    </label>
+</div>
+
+<div class="row">
+    <button id="startBtn">Spustit náhled</button>
+    <button id="stopBtn" disabled>Zastavit</button>
+    <button id="muteBtn" disabled>Ztlumit mikrofon</button>
+    <span id="status" class="pill">Neaktivní</span>
+</div>
+
+<div class="row" style="align-items:center">
+    <label style="flex-direction:row; align-items:center; gap:8px; margin-right:auto;">
+        <input id="monitorChk" type="checkbox" />
+        Přehrát vlastní zvuk (sluchátka doporučena)
+    </label>
+    <div class="vu-wrap" title="Úroveň mikrofonu">
+        <div id="vu" class="vu-bar"></div>
+    </div>
+</div>
+
+<div id="videoWrapper" class="video-wrapper">
+    <video id="preview" playsinline autoplay muted></video>
+</div>
+
+<p id="error" class="danger"></p>
+
+<script src="./app.js"></script>
+</body>
+</html>

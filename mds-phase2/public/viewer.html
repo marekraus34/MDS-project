@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>MDS – Viewer (WebRTC + simple-peer)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; color:#222; }
+    .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin: 10px 0; }
+    input, button { padding:8px 10px; font-size:14px; }
+    button { border-radius:8px; border:1px solid #ddd; background:#fafafa; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    video { width:100%; max-width:720px; background:#000; border-radius:10px; }
+    .pill { padding:4px 10px; border-radius:999px; background:#eee; font-size:12px; }
+    .ok { color:#0a7; }
+    .danger { color:#b00020; }
+  </style>
+</head>
+<body>
+  <h1>MDS – Viewer</h1>
+  <p>Tahle stránka <b>přijímá</b> WebRTC stream od senderu ve stejné místnosti.</p>
+
+  <div class="row">
+    <label>Místnost:
+      <input id="room" value="demo" />
+    </label>
+    <button id="joinBtn">Připojit se</button>
+    <span id="status" class="pill">Nepřipojeno</span>
+  </div>
+
+  <video id="remoteVideo" playsinline autoplay controls></video>
+  <p id="error" class="danger"></p>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+  <script type="module" src="./viewer.js"></script>
+</body>
+</html>

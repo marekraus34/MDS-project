@@ -1,0 +1,98 @@
+🧩 Fáze 1: Základy práce s webkamerou a mikrofónem (frontend)
+
+Cíl: Naučit se používat MediaStream API.
+
+➡️ Zkus jednoduchou stránku v HTML/JS, která:
+
+po kliknutí na tlačítko spustí kameru a mikrofon,
+
+zobrazí náhled videa v <video> elementu,
+
+umožní ztlumit mikrofon (track.enabled = false).
+
+📘 K tomu si prostuduj:
+Media Capture and Streams API
+
+💡 Tip:
+Použij navigator.mediaDevices.getUserMedia({ video: true, audio: true }).
+
+🔄 Fáze 2: Základy WebRTC přenosu
+
+Cíl: Pochopit, jak posílat video v reálném čase mezi dvěma klienty nebo klientem a serverem.
+
+➡️ Udělej malý příklad:
+
+jeden „sender“ (kamera),
+
+jeden „receiver“ (zobrazí video na stránce).
+
+Použij jednoduchý Node.js server pro signalizaci (pomocí Socket.IO nebo WebSocket).
+Zatím nemusíš nic ukládat — jen zobraz, že se obraz skutečně přenáší.
+
+📘 K tomu:
+
+WebRTC tutorial MDN
+
+Vyzkoušej si knihovnu simple-peer – hodně zjednoduší základní WebRTC propojení.
+
+⚙️ Fáze 3: Backend – příjem streamu a tvorba HLS
+
+Cíl: Naučit se, jak vytvořit HLS stream pomocí Nginx a FFmpeg.
+
+➡️ Postup:
+
+Nainstaluj nginx + nginx-rtmp-module.
+
+Zkus poslat RTMP stream z OBS nebo ffmpeg.
+
+Nech ffmpeg převádět RTMP → HLS playlist (.m3u8 + .ts fragmenty).
+
+💡 Např. příkaz:
+
+ffmpeg -i rtmp://localhost/live/stream -c:v libx264 -c:a aac -f hls -hls_time 4 -hls_playlist_type event /path/to/hls/output.m3u8
+
+
+Zatím můžeš posílat cokoliv (např. z testovacího souboru) — nemusí to být ještě z WebRTC.
+
+🧠 Fáze 4: Kompozice více kamer
+
+Cíl: Sloučit více video streamů do mřížky pomocí FFmpeg.
+
+➡️ Až zvládneš základy HLS, můžeš zkoušet:
+
+kombinovat více RTMP vstupů do jednoho výstupu (např. 2–4 testovací videa),
+
+přidat textové popisky (drawtext filter),
+
+vytvořit dynamické rozložení.
+
+Ukázka jednoduché mřížky:
+
+ffmpeg -i cam1.ts -i cam2.ts -filter_complex "[0:v][1:v]hstack=inputs=2[v]" -map "[v]" output.mp4
+
+🌐 Fáze 5: Webové rozhraní pro přehrávání HLS
+
+Cíl: Vytvořit stránku, která umí přehrát HLS a zobrazit informace o připojených uživatelích.
+
+➡️ Použij knihovnu Video.js s pluginem videojs-http-streaming.
+Na začátek ti stačí prostý <video> s odkazem na .m3u8.
+
+💡 Testovací server pro vývoj:
+použij http-server (Node.js) nebo vestavěný nginx.
+
+🧱 Fáze 6: Integrace a zabezpečení
+
+Cíl: Spojit vše dohromady:
+
+WebRTC → server (RTMP) → FFmpeg → HLS → player.
+
+Autorizace (např. jméno, token).
+
+Dynamická aktualizace seznamu připojených uživatelů (přes WebSockety).
+
+Pokud chceš, můžu ti připravit:
+
+🗂 strukturu projektu (adresáře, základní HTML + Node.js skript)
+
+📜 plán učení na první 2 týdny,
+abys začal reálně něco tvořit i bez pokročilých znalostí.

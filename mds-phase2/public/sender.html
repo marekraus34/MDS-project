@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>MDS – Sender (WebRTC + simple-peer)</title>
+  <style>
+    :root { --gap:16px; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; color:#222; }
+    h1 { margin: 0 0 8px; }
+    p { margin: 0 0 12px; }
+    .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin: 10px 0; }
+    input, button { padding:8px 10px; font-size:14px; }
+    button { border-radius: 8px; border: 1px solid #ddd; background:#fafafa; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    video { width:100%; max-width:720px; background:#000; border-radius:10px; }
+    .pill { padding:4px 10px; border-radius:999px; background:#eee; font-size:12px; }
+    .ok { color:#0a7; }
+    .danger { color:#b00020; }
+
+    .video-wrapper {
+      display: inline-block;
+      padding: 6px;
+      border-radius: 14px;
+      transition: box-shadow 0.15s ease-out;
+      margin-top: 20px;
+    }
+    .video-wrapper.active {
+      box-shadow: 0 0 18px 4px #4caf50;
+    }
+  </style>
+</head>
+<body>
+  <h1>MDS – Sender</h1>
+  <p>
+    Tahle stránka <b>publikuje</b> tvoji kameru a mikrofon přes WebRTC.<br>
+    Divák se připojí na <code>viewer.html</code> do stejné místnosti.
+  </p>
+
+  <div class="row">
+    <label>Místnost:
+      <input id="room" value="demo" />
+    </label>
+    <button id="joinBtn">Připojit se</button>
+    <button id="startBtn" disabled>Start vysílání</button>
+    <button id="stopBtn" disabled>Zastavit</button>
+    <span id="status" class="pill">Nepřipojeno</span>
+  </div>
+
+  <div class="row">
+    <label>Jméno:
+      <input id="displayName" placeholder="Např. Jan Novák" />
+    </label>
+    <button id="muteBtn" disabled>Ztlumit mikrofon</button>
+  </div>
+
+  <div id="videoWrapper" class="video-wrapper">
+    <video id="localVideo" playsinline autoplay muted></video>
+  </div>
+
+  <p id="error" class="danger"></p>
+
+  <!-- Socket.IO klient -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- simple-peer z CDN (potřebuješ internet) -->
+  <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+  <script type="module" src="./sender.js"></script>
+</body>
+</html>

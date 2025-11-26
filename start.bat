@@ -1,0 +1,7 @@
+@echo off
+.\nginx\nginx.exe
+node .\nginx\webrtc-signaling.js
+ffmpeg -re -stream_loop -1 -i ./media/test2.mp4 -c:v libx264 -preset veryfast -b:v 2500k -c:a aac -ar 48000 -ac 2 -f flv rtmp://localhost:1936/live/cam2
+ffmpeg -re -stream_loop -1 -i ./media/test.mp4 -c:v libx264 -preset veryfast -b:v 2500k -c:a aac -ar 48000 -ac 2 -f flv rtmp://localhost:1936/live/cam1
+node .\nginx\grid-controller.js
+ffmpeg -i rtmp://localhost:1936/final/257148 -filter_complex "[0:v]split=3[v720][v480][v360];[v720]scale=1280:720[v720out];[v480]scale=854:480[v480out];[v360]scale=640:360[v360out]" -map "[v720out]" -map 0:a -map "[v480out]" -map 0:a -map "[v360out]" -map 0:a -c:v:0 libx264 -preset veryfast -pix_fmt yuv420p -b:v:0 2800k -maxrate:v:0 2996k -bufsize:v:0 4200k -c:v:1 libx264 -preset veryfast -pix_fmt yuv420p -b:v:1 1600k -maxrate:v:1 1712k -bufsize:v:1 2400k -c:v:2 libx264 -preset veryfast -pix_fmt yuv420p -b:v:2 800k  -maxrate:v:2 856k  -bufsize:v:2 1200k -c:a:0 aac -b:a:0 128k -c:a:1 aac -b:a:1 128k -c:a:2 aac -b:a:2 96k -f hls -hls_time 4 -hls_playlist_type event -hls_segment_filename "temp/tmp_hls/multi_v%v_%03d.ts" -master_pl_name master.m3u8 -var_stream_map "v:0,a:0 v:1,a:1 v:2,a:2" temp/tmp_hls/multi_v%v.m3u8
