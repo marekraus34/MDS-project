@@ -21,7 +21,7 @@ echo ========================================
 echo.
 
 REM === KONFIGURACE - UPRAVTE! ===
-set NGINX_DIR=C:\nginx
+set NGINX_DIR=C:\Users\Marek\OneDrive - VUT\MDS\mdstesting\projekt_MDS-main\nginx
 set NGINX_EXE=%NGINX_DIR%\nginx.exe
 set NGINX_CONF=%NGINX_DIR%\conf\nginx.conf
 
