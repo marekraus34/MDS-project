@@ -1,7 +1,23 @@
-// presenter.js
-// ===========
-// MediaStream API – kamera + mikrofon + náhled + mute
-// + WebRTC odesílání streamu viewerovi přes signaling server
+// presenter.js - OPRAVENÁ VERZE
+// Explicitně vyžaduje povolení kamery a mikrofonu
+
+// === FALLBACK PRO WEBRTC API ===
+const RTCPeerConnection = window.RTCPeerConnection || 
+                          window.webkitRTCPeerConnection || 
+                          window.mozRTCPeerConnection;
+
+const RTCSessionDescription = window.RTCSessionDescription || 
+                               window.webkitRTCSessionDescription || 
+                               window.mozRTCSessionDescription;
+
+const RTCIceCandidate = window.RTCIceCandidate || 
+                        window.webkitRTCIceCandidate || 
+                        window.mozRTCIceCandidate;
+
+if (!RTCPeerConnection) {
+    console.error('❌ RTCPeerConnection není dostupné!');
+    alert('❌ Váš prohlížeč nepodporuje WebRTC!\n\nPoužijte:\n- Chrome 90+\n- Edge 90+\n- Firefox 80+\n\nNebo zkuste HTTPS: https://localhost/presenter.html');
+}
 
 let localStream = null;
 let currentAudioTrack = null;
@@ -27,82 +43,136 @@ const btnStartPreview = document.getElementById('btnStartPreview');
 const btnStopPreview  = document.getElementById('btnStopPreview');
 const btnMute         = document.getElementById('btnMute');
 
-// === Helpery pro MediaStream ===
+console.log('🎬 Presenter.js načten');
+
+// === INICIALIZACE ===
+window.addEventListener('load', () => {
+    console.log('✅ Stránka načtena, inicializuji...');
+    
+    // Připoj signaling server
+    connectSignaling();
+    
+    // Načti zařízení
+    initDevices().catch(err => {
+        console.error('❌ Chyba při inicializaci:', err);
+        statusLabel.textContent = 'Chyba: ' + err.message;
+    });
+});
+
+// === FUNKCE ===
+
 function stopLocalStream() {
     if (localStream) {
-        localStream.getTracks().forEach(t => t.stop());
+        localStream.getTracks().forEach(t => {
+            console.log('🛑 Zastavuji track:', t.kind);
+            t.stop();
+        });
         localStream = null;
         currentAudioTrack = null;
     }
 }
 
-// Načtení kamer/mikrofonů
 async function initDevices() {
     try {
+        console.log('📹 Načítám zařízení...');
+        
         if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
-            statusLabel.textContent = 'Prohlížeč nepodporuje MediaDevices.';
-            return;
+            throw new Error('Prohlížeč nepodporuje MediaDevices API');
         }
 
-        const devices = await navigator.mediaDevices.enumerateDevices();
+        // POUZE AUDIO - vyžádej povolení
+        console.log('🎤 Vyžaduji povolení k mikrofonu (bez kamery)...');
+        
+        try {
+            const tempStream = await navigator.mediaDevices.getUserMedia({ 
+                video: false,  // ← BEZ KAMERY
+                audio: true 
+            });
+            
+            console.log('✅ Povolení k mikrofonu uděleno!');
+            
+            // Zastav dočasný stream
+            tempStream.getTracks().forEach(t => t.stop());
+            
+        } catch (permErr) {
+            console.error('❌ Povolení zamítnuto:', permErr);
+            throw new Error('Musíte povolit přístup k mikrofonu!');
+        }
 
-        cameraSelect.innerHTML = '<option value="">Výchozí</option>';
-        micSelect.innerHTML    = '<option value="">Výchozí</option>';
+        // Načti seznam zařízení
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        console.log('📋 Nalezená zařízení:', devices.length);
+
+        // Skryj výběr kamery (není potřeba)
+        if (cameraSelect && cameraSelect.parentElement) {
+            cameraSelect.parentElement.parentElement.style.display = 'none';
+        }
+
+        micSelect.innerHTML = '<option value="">Výchozí</option>';
+
+        let micCount = 0;
 
         devices.forEach(device => {
-            if (device.kind === 'videoinput') {
+            console.log(`  - ${device.kind}: ${device.label || '(bez názvu)'}`);
+            
+            if (device.kind === 'audioinput') {
                 const opt = document.createElement('option');
                 opt.value = device.deviceId;
-                opt.textContent = device.label || `Kamera ${cameraSelect.length}`;
-                cameraSelect.appendChild(opt);
-            } else if (device.kind === 'audioinput') {
-                const opt = document.createElement('option');
-                opt.value = device.deviceId;
-                opt.textContent = device.label || `Mikrofon ${micSelect.length}`;
+                opt.textContent = device.label || `Mikrofon ${++micCount}`;
                 micSelect.appendChild(opt);
             }
         });
 
-        statusLabel.textContent = 'Zařízení načtena. Zadej jméno a spusť náhled.';
+        statusLabel.textContent = `✅ Nalezeno ${micCount} mikrofonů. Zadejte jméno a spusťte náhled (POUZE AUDIO).`;
+        statusLabel.style.color = '#22c55e';
+
     } catch (err) {
-        console.error('Chyba při enumerateDevices:', err);
-        statusLabel.textContent = 'Nepodařilo se načíst zařízení.';
+        console.error('❌ Chyba při načítání zařízení:', err);
+        statusLabel.textContent = '❌ ' + err.message;
+        statusLabel.style.color = '#ef4444';
+        throw err;
     }
 }
 
-// Spuštění náhledu
 async function startPreview() {
+    console.log('▶️ Spouštím náhled...');
+    
     const name = (nameInput.value || '').trim();
     if (!name) {
-        alert('Nejdřív zadej své jméno.');
+        alert('❌ Nejdříve zadejte své jméno.');
         nameInput.focus();
         return;
     }
 
-    nameDisplay.textContent = name || '–';
-    statusLabel.textContent = 'Žádám o přístup ke kameře a mikrofonu…';
+    nameDisplay.textContent = name;
+    statusLabel.textContent = '⏳ Žádám o přístup ke kameře a mikrofonu...';
 
     // Zastav případný předchozí stream
     stopLocalStream();
 
-    const videoConstraint = cameraSelect.value
-        ? { deviceId: { exact: cameraSelect.value } }
-        : true;
+    // POUZE AUDIO - bez kamery
+    let videoConstraint = false;  // ← ŽÁDNÉ VIDEO
 
-    const audioConstraint = micSelect.value
+    let audioConstraint = micSelect.value
         ? { deviceId: { exact: micSelect.value } }
         : true;
 
     try {
+        console.log('🎤 getUserMedia POUZE AUDIO:', { video: videoConstraint, audio: audioConstraint });
+        
         const stream = await navigator.mediaDevices.getUserMedia({
-            video: videoConstraint,
+            video: videoConstraint,  // false
             audio: audioConstraint
         });
 
+        console.log('✅ Audio stream získán:', stream.id);
+        console.log('   Audio tracks:', stream.getAudioTracks().length);
+
         localStream = stream;
+        
+        // Nastav audio do video elementu (i když není video, element to přehraje)
         localVideo.srcObject = stream;
-        localVideo.muted = true; // aby to nehoukalo
-        await localVideo.play().catch(() => {});
+        localVideo.muted = true;
 
         currentAudioTrack = stream.getAudioTracks()[0] || null;
         isMuted = false;
@@ -111,29 +181,48 @@ async function startPreview() {
         btnStartPreview.disabled = true;
         btnStopPreview.disabled  = false;
         btnMute.disabled         = !currentAudioTrack;
-        statusLabel.textContent  = 'Náhled běží. Kamera a mikrofon jsou aktivní.';
+        
+        statusLabel.textContent  = '✅ Audio stream běží (bez videa).';
+        statusLabel.style.color = '#22c55e';
 
-        // Jakmile máme stream, napojíme ho do WebRTC
         setupWebRTC();
 
     } catch (err) {
-        console.error('getUserMedia error:', err);
-        statusLabel.textContent = 'Nepodařilo se získat kameru/mikrofon.';
+        console.error('❌ getUserMedia selhalo:', err);
+        
+        let errorMsg = 'Chyba: ';
+        if (err.name === 'NotAllowedError') {
+            errorMsg += 'Přístup k mikrofonu zamítnut. Povolte mikrofon v nastavení prohlížeče.';
+        } else if (err.name === 'NotFoundError') {
+            errorMsg += 'Mikrofon nebyl nalezen. Máte připojený mikrofon?';
+        } else if (err.name === 'NotReadableError') {
+            errorMsg += 'Mikrofon je používán jinou aplikací (Teams, Zoom, atd.)';
+        } else {
+            errorMsg += err.message;
+        }
+        
+        statusLabel.textContent = errorMsg;
+        statusLabel.style.color = '#ef4444';
+        alert(errorMsg);
     }
 }
 
-// Zastavení náhledu
 function stopPreview() {
+    console.log('⏹️ Zastavuji náhled...');
+    
     stopLocalStream();
     if (localVideo) {
         localVideo.srcObject = null;
     }
+    
     btnStartPreview.disabled = false;
     btnStopPreview.disabled  = true;
     btnMute.disabled         = true;
     isMuted = false;
     updateMuteButton();
+    
     statusLabel.textContent = 'Náhled zastaven.';
+    statusLabel.style.color = '#9ca3af';
 
     if (pc) {
         pc.close();
@@ -141,13 +230,12 @@ function stopPreview() {
     }
 }
 
-// Přepínání mute
 function toggleMute() {
     if (!currentAudioTrack) return;
     isMuted = !isMuted;
     currentAudioTrack.enabled = !isMuted;
     updateMuteButton();
-    statusLabel.textContent = isMuted ? 'Mikrofon je ztlumen.' : 'Mikrofon je aktivní.';
+    statusLabel.textContent = isMuted ? '🔇 Mikrofon ztlumen' : '🔊 Mikrofon aktivní';
 }
 
 function updateMuteButton() {
@@ -159,16 +247,20 @@ function updateMuteButton() {
     btnMute.textContent = isMuted ? 'Zapnout mikrofon' : 'Ztlumit mikrofon';
 }
 
-// === WebRTC část ===
+// === WEBRTC ===
 
 function connectSignaling() {
+    console.log('🔌 Připojuji se k signaling serveru...');
+    
     ws = new WebSocket(SIGNALING_URL);
 
     ws.onopen = () => {
-        console.log('WS: připojeno k signaling serveru');
+        console.log('✅ WebSocket připojen');
+        const name = nameInput.value || 'Neznámý';
         ws.send(JSON.stringify({
             type: 'join',
-            role: 'presenter'
+            role: 'presenter',
+            name: name
         }));
     };
 
@@ -177,59 +269,62 @@ function connectSignaling() {
         try {
             msg = JSON.parse(event.data);
         } catch (e) {
-            console.error('Nevalidní WS zpráva:', event.data);
+            console.error('❌ Nevalidní WS zpráva:', event.data);
             return;
         }
 
+        console.log('📨 WS zpráva:', msg.type);
+
         switch (msg.type) {
             case 'joined':
-                console.log(`WS: joined as ${msg.role}`);
+                console.log(`✅ Joined as ${msg.role}, streamId: ${msg.streamId}`);
                 break;
 
             case 'peer-ready':
-                console.log('WS: protistrana připravena:', msg.peer);
-                // Pokud už máme PC a stream, negotiationneeded to srovná
+                console.log('👥 Viewer připraven');
                 break;
 
             case 'answer':
                 if (pc && msg.sdp) {
-                    console.log('WS: dostal jsem answer od vieweru');
+                    console.log('📥 Přijata answer');
                     await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
                 }
                 break;
 
             case 'ice':
+            case 'ice-candidate':
                 if (pc && msg.candidate) {
                     try {
                         await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                        console.log('✅ ICE candidate přidán');
                     } catch (e) {
-                        console.error('Chyba při addIceCandidate:', e);
+                        console.error('❌ Chyba ICE:', e);
                     }
                 }
                 break;
 
             default:
-                console.log('WS: neznámý typ', msg);
+                console.log('❓ Neznámý typ:', msg.type);
         }
     };
 
     ws.onclose = () => {
-        console.log('WS: odpojeno od signaling serveru');
+        console.log('🔌 WebSocket odpojen');
     };
 
     ws.onerror = (err) => {
-        console.error('WS chyba:', err);
+        console.error('❌ WebSocket chyba:', err);
     };
 }
 
 async function setupWebRTC() {
     if (!localStream) {
-        console.warn('setupWebRTC voláno bez localStreamu');
+        console.warn('⚠️ setupWebRTC bez streamu');
         return;
     }
+    
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-        console.warn('Signaling WS ještě není ready, počkám...');
-        // zkus drobný delay a pak znovu
+        console.warn('⚠️ WebSocket není připojen, čekám...');
         setTimeout(setupWebRTC, 1000);
         return;
     }
@@ -238,9 +333,9 @@ async function setupWebRTC() {
         pc.close();
     }
 
+    console.log('🔧 Vytvářím RTCPeerConnection...');
     pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-    // posíláme ICE kandidáty viewerovi
     pc.onicecandidate = (event) => {
         if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
@@ -248,27 +343,31 @@ async function setupWebRTC() {
                 role: 'presenter',
                 candidate: event.candidate
             }));
+            console.log('📤 ICE candidate odeslán');
         }
     };
 
     pc.onconnectionstatechange = () => {
-        console.log('WebRTC state:', pc.connectionState);
+        console.log('🔗 WebRTC state:', pc.connectionState);
         if (pc.connectionState === 'connected') {
-            statusLabel.textContent = 'WebRTC: připojeno k viewerovi.';
+            statusLabel.textContent = '✅ WebRTC: Připojeno k viewerovi';
+            statusLabel.style.color = '#22c55e';
         } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-            statusLabel.textContent = 'WebRTC: odpojeno.';
+            statusLabel.textContent = '⚠️ WebRTC: Odpojeno';
+            statusLabel.style.color = '#f59e0b';
         }
     };
 
-    // Přidáme všechny tracky z localStream
+    // Přidej tracky
     localStream.getTracks().forEach(track => {
+        console.log(`➕ Přidávám track: ${track.kind}`);
         pc.addTrack(track, localStream);
     });
 
-    // Jakmile je potřeba nabídka, vytvoříme offer
+    // Vytvoř offer
     pc.onnegotiationneeded = async () => {
         try {
-            console.log('WebRTC: negotiationneeded → dělám offer');
+            console.log('🤝 Negotiation needed → vytvářím offer...');
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
 
@@ -276,46 +375,51 @@ async function setupWebRTC() {
                 type: 'offer',
                 sdp: pc.localDescription
             }));
+            
+            console.log('📤 Offer odeslán');
         } catch (e) {
-            console.error('Chyba při negotiationneeded:', e);
+            console.error('❌ Chyba při negotiation:', e);
         }
     };
 }
 
-// Event listenery
+// === EVENT LISTENERY ===
+
 if (btnStartPreview) {
     btnStartPreview.addEventListener('click', () => {
         startPreview().catch(err => {
-            console.error(err);
-            statusLabel.textContent = 'Chyba při startu náhledu.';
+            console.error('❌ Chyba při spuštění:', err);
+            statusLabel.textContent = 'Chyba: ' + err.message;
+            statusLabel.style.color = '#ef4444';
         });
     });
 }
+
 if (btnStopPreview) {
     btnStopPreview.addEventListener('click', stopPreview);
 }
+
 if (btnMute) {
     btnMute.addEventListener('click', toggleMute);
 }
 
-// Změna zařízení → restart náhledu (a tím pádem i WebRTC)
+// Změna zařízení → restart náhledu
 if (cameraSelect) {
     cameraSelect.addEventListener('change', () => {
         if (localStream) {
-            startPreview().catch(() => {});
-        }
-    });
-}
-if (micSelect) {
-    micSelect.addEventListener('change', () => {
-        if (localStream) {
-            startPreview().catch(() => {});
+            console.log('🔄 Kamera změněna, restartuji náhled...');
+            startPreview().catch(console.error);
         }
     });
 }
 
-// Init
-window.addEventListener('load', () => {
-    connectSignaling();
-    initDevices().catch(console.error);
-});
+if (micSelect) {
+    micSelect.addEventListener('change', () => {
+        if (localStream) {
+            console.log('🔄 Mikrofon změněn, restartuji náhled...');
+            startPreview().catch(console.error);
+        }
+    });
+}
+
+console.log('✅ Presenter.js připraven');
