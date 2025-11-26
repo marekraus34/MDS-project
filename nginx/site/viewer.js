@@ -349,8 +349,8 @@ function createViewerPeer() {
     pc.onicecandidate = (event) => {
         if (event.candidate && wrtcSocket && wrtcSocket.readyState === WebSocket.OPEN) {
             wrtcSocket.send(JSON.stringify({
-                type: "ice-candidate",
-                target: "presenter",
+                type: "ice",
+                target: "viewer",
                 candidate: event.candidate
             }));
         }
@@ -373,7 +373,7 @@ function connectWebRTCViewer() {
 
     wrtcSocket.onopen = () => {
         console.log("Viewer WS: připojeno k signaling serveru");
-        wrtcSocket.send(JSON.stringify({ type: "role", role: "viewer" }));
+        wrtcSocket.send(JSON.stringify({ type: "join", role: "viewer" }));
         console.log("Viewer WS: joined as viewer");
     };
 
@@ -385,6 +385,27 @@ function connectWebRTCViewer() {
             console.error("Viewer WS: neplatný JSON", event.data);
             return;
         }
+        if (msg.type === "offer") {
+    console.log("Viewer: přišla OFFER");
+    if (!wrtcPeer) wrtcPeer = createViewerPeer();
+
+    await wrtcPeer.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+    const answer = await wrtcPeer.createAnswer();
+    await wrtcPeer.setLocalDescription(answer);
+
+    wrtcSocket.send(JSON.stringify({
+        type: "answer",
+        sdp: answer
+    }));
+}
+
+if (msg.type === "ice") {
+    console.log("Viewer: ICE od presentera");
+    if (wrtcPeer && msg.candidate) {
+        wrtcPeer.addIceCandidate(msg.candidate);
+    }
+}
+
 
         switch (msg.type) {
             case "presenter-ready":
