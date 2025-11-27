@@ -1,5 +1,6 @@
 // grid-controller.js
-// Spouštěj z adresáře MDS/nginx :  node grid-controller.js
+// Spouštěj z adresáře MDS/nginx: node grid-controller.js
+// Dynamická mřížka 1–6 kamer s popisky -> RTMP final/257148
 
 const http = require('http');
 const { spawn } = require('child_process');
@@ -14,8 +15,8 @@ const FFMPEG_PATH = 'ffmpeg';
 // TADY SI PŘEPIŠ JMÉNA PODLE SEBE
 const NAME_BY_CAM = {
     cam1: 'Martin',
-    cam2: 'Přednášející 2',
-    cam3: 'Přednášející 3',
+    cam2: 'Mára',
+    cam3: 'Libuška',
     cam4: 'Přednášející 4',
     cam5: 'Přednášející 5',
     cam6: 'Přednášející 6'
@@ -23,8 +24,28 @@ const NAME_BY_CAM = {
 
 let currentActive = [];
 let ffmpegProc = null;
+let updateCount = 0;
 
 const POLL_INTERVAL_MS = 5000; // každých 5 s se podíváme na /stats
+
+console.log('╔═══════════════════════════════════════════════════════════╗');
+console.log('║      MDS GRID CONTROLLER - Multi-Camera Composer          ║');
+console.log('╚═══════════════════════════════════════════════════════════╝');
+console.log('');
+console.log('📡 Konfigurace:');
+console.log('   • Vstup:    rtmp://localhost:' + RTMP_PORT + '/' + RTMP_APP_IN + '/cam[1-6]');
+console.log('   • Výstup:   rtmp://localhost:' + RTMP_PORT + '/' + RTMP_APP_OUT + '/257148');
+console.log('   • HLS URL:  http://localhost:8081/hls/index.m3u8');
+console.log('   • Polling:  každých ' + (POLL_INTERVAL_MS / 1000) + 's');
+console.log('   • Max kamer: ' + MAX_CAMERAS);
+console.log('');
+console.log('👥 Názvy presenterů:');
+for (const [cam, name] of Object.entries(NAME_BY_CAM)) {
+    console.log('   • ' + cam + ': ' + name);
+}
+console.log('');
+console.log('🔄 Spouštím grid controller...');
+console.log('');
 
 // ----------- čtení /stats -------------
 
@@ -37,7 +58,7 @@ function fetchActiveCams(callback) {
             callback(null, cams);
         });
     }).on('error', (err) => {
-        console.error('Chyba při čtení /stats:', err.message);
+        console.error('❌ Chyba při čtení /stats:', err.message);
         callback(err, []);
     });
 }
@@ -52,7 +73,7 @@ function parseCamsFromStats(xmlString) {
             result.add(name);
         }
     }
-    return Array.from(result).sort(); // např. ["cam1","cam2"]
+    return Array.from(result).sort();
 }
 
 function arraysEqual(a, b) {
@@ -67,7 +88,6 @@ function arraysEqual(a, b) {
 
 function getLabelForCam(camName) {
     const label = NAME_BY_CAM[camName] || camName;
-    // odřízneme znaky, co by rozbily FFmpeg parametry
     return label.replace(/[:'\\]/g, '').replace(/,/g, ' ');
 }
 
@@ -92,7 +112,7 @@ function buildFfmpegArgs(activeCams) {
         const label = getLabelForCam(camName);
 
         filterParts.push(
-            `[${i}:v]` +
+            `[${i}]` +
             `scale=640:360:force_original_aspect_ratio=decrease,` +
             `pad=640:360:(ow-iw)/2:(oh-ih)/2,` +
             `drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':` +
@@ -153,30 +173,57 @@ function buildFfmpegArgs(activeCams) {
     return args;
 }
 
+function getGridLayout(count) {
+    if (count === 1) return '1x1 (fullscreen)';
+    if (count === 2) return '2x1';
+    if (count <= 3) return '3x1';
+    if (count <= 6) return '3x2';
+    return 'custom';
+}
+
 function startFfmpeg(activeCams) {
     const args = buildFfmpegArgs(activeCams);
     if (!args) {
-        console.log('Žádné aktivní kamery, ffmpeg nespouštím.');
+        console.log('⚪ Žádné aktivní kamery → FFmpeg neběží');
         return;
     }
 
-    console.log('Spouštím ffmpeg (grid) pro kamery:', activeCams.join(', '));
-    // console.log('FFmpeg args:', args.join(' ')); // debug
+    const layout = getGridLayout(activeCams.length);
+    const names = activeCams.map(cam => NAME_BY_CAM[cam] || cam).join(', ');
+    
+    console.log('');
+    console.log('▶️  SPOUŠTÍM FFMPEG GRID:');
+    console.log('   📹 Kamery:  ' + activeCams.join(', '));
+    console.log('   👥 Jména:   ' + names);
+    console.log('   📐 Layout:  ' + layout);
+    console.log('   🎬 Výstup:  rtmp://localhost:' + RTMP_PORT + '/final/257148');
+    console.log('');
 
     ffmpegProc = spawn(FFMPEG_PATH, args, {
         cwd: process.cwd(),
-        stdio: ['ignore', 'inherit', 'inherit']
+        stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    // Logovat pouze důležité FFmpeg výstupy
+    ffmpegProc.stderr.on('data', (data) => {
+        const output = data.toString();
+        // Logovat jen chyby a důležité info
+        if (output.includes('Error') || output.includes('failed') || output.includes('Invalid')) {
+            console.error('❌ FFmpeg error:', output.trim());
+        }
     });
 
     ffmpegProc.on('exit', (code, signal) => {
-        console.log(`ffmpeg (grid) ukončen (code=${code}, signal=${signal})`);
+        if (code !== 0 && code !== null) {
+            console.log('⏹️  FFmpeg ukončen (code=' + code + ', signal=' + signal + ')');
+        }
         ffmpegProc = null;
     });
 }
 
 function stopFfmpeg() {
     if (ffmpegProc) {
-        console.log('Zastavuji ffmpeg (grid)...');
+        console.log('⏹️  Zastavuji FFmpeg grid...');
         ffmpegProc.kill('SIGTERM');
         ffmpegProc = null;
     }
@@ -184,8 +231,15 @@ function stopFfmpeg() {
 
 function updatePipeline(newActive) {
     if (!newActive) newActive = [];
+    
+    updateCount++;
+    
     if (!arraysEqual(currentActive, newActive)) {
-        console.log('Změna aktivních kamer:', currentActive, '=>', newActive);
+        console.log('');
+        console.log('🔄 UPDATE #' + updateCount + ' - Změna aktivních kamer:');
+        console.log('   Předchozí: [' + (currentActive.length > 0 ? currentActive.join(', ') : 'žádné') + ']');
+        console.log('   Nové:      [' + (newActive.length > 0 ? newActive.join(', ') : 'žádné') + ']');
+        
         currentActive = newActive.slice();
 
         stopFfmpeg();
@@ -193,8 +247,11 @@ function updatePipeline(newActive) {
         if (currentActive.length > 0) {
             startFfmpeg(currentActive);
         } else {
-            console.log('Žádné kamery – ffmpeg (grid) neběží.');
+            console.log('⚪ Žádné kamery aktivní → grid vypnut');
         }
+    } else {
+        // Tiché logování bez změny
+        process.stdout.write('.');
     }
 }
 
@@ -203,7 +260,7 @@ function updatePipeline(newActive) {
 function poll() {
     fetchActiveCams((err, cams) => {
         if (err) {
-            console.error('Nepodařilo se načíst aktivní kamery.');
+            console.error('❌ Nepodařilo se načíst aktivní kamery');
         } else {
             const limited = cams.filter((c, idx) => idx < MAX_CAMERAS);
             updatePipeline(limited);
@@ -211,8 +268,24 @@ function poll() {
     });
 }
 
-console.log('Spouštím grid-controller (dynamická mřížka 1–6 kamer s popisky -> RTMP final/257148)...');
-console.log('Každých', POLL_INTERVAL_MS / 1000, 's čtu /stats a upravuji ffmpeg pipeline.');
-
+// První poll ihned
 poll();
+
+// Pak každých X sekund
 setInterval(poll, POLL_INTERVAL_MS);
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+    console.log('');
+    console.log('');
+    console.log('🛑 Zastavuji grid controller...');
+    stopFfmpeg();
+    process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+    console.log('');
+    console.log('🛑 Zastavuji grid controller...');
+    stopFfmpeg();
+    process.exit(0);
+});
