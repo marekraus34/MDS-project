@@ -1,214 +1,553 @@
-<!DOCTYPE html>
-<html lang="cs">
-<head>
-    <meta charset="UTF-8">
-    <title>MDS – Viewer</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+// viewer.js - DUAL VIDEO VERSION
+// Zobrazuje WebRTC stream od presentera + HLS grid stream vedle sebe
 
-    <!-- Bootstrap 5 -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script type="module" src="https://cdn.jsdelivr.net/npm/hls-video-element@1.2/+esm"></script>
+// === Globální proměnné ===
+let player = null; // Video.js player pro HLS
+let localStream = null; // Lokální stream (kamera/mikrofon)
+let pc = null; // WebRTC peer connection
+let ws = null; // WebSocket pro signaling
+let isLoggedIn = false;
+let currentStreamSource = 'multi';
 
-    <style>
-        body {
-            background: #0f172a; /* dark navy */
-            color: #e5e7eb;
+const SIGNALING_URL = 'ws://localhost:3000';
+
+// DOM elementy
+const loginContainer = document.getElementById('loginContainer');
+const viewerContainer = document.getElementById('viewerContainer');
+const viewerName = document.getElementById('viewerName');
+const viewerCode = document.getElementById('viewerCode');
+const joinBtn = document.getElementById('joinBtn');
+const loginError = document.getElementById('loginError');
+
+// Video elementy
+const viewerVideo = document.getElementById('viewerVideo'); // HLS player
+const webrtcRemote = document.getElementById('webrtcRemote'); // WebRTC remote
+const localVideo = document.getElementById('localVideo'); // Lokální preview
+const localPreview = document.getElementById('localPreview');
+
+// Status elementy
+const viewerStatus = document.getElementById('viewerStatus');
+const mediaStatus = document.getElementById('mediaStatus');
+const detailedMediaStatus = document.getElementById('detailedMediaStatus');
+const webrtcLiveBadge = document.getElementById('webrtcLiveBadge');
+const hlsLiveBadge = document.getElementById('hlsLiveBadge');
+const webrtcPlaceholder = document.getElementById('webrtcPlaceholder');
+
+// Control elementy
+const streamSelect = document.getElementById('streamSelect');
+const playBtn = document.getElementById('playBtn');
+const stopBtn = document.getElementById('stopBtn');
+const qualitySelect = document.getElementById('qualitySelect');
+const qualityLabel = document.getElementById('qualityLabel');
+const viewerError = document.getElementById('viewerError');
+const btnLive = document.getElementById('btnLive');
+const btnBack30 = document.getElementById('btnBack30');
+const btnBack5min = document.getElementById('btnBack5min');
+const presenterList = document.getElementById('presenterList');
+
+// === CAMERA/MICROPHONE PERMISSIONS ===
+async function requestMediaPermissions() {
+    try {
+        console.log('🎤 Vyžadování oprávnění ke kameře a mikrofonu...');
+        
+        localStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            },
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            }
+        });
+
+        console.log('✅ Oprávnění uděleno!');
+        
+        // Zobraz lokální video preview
+        if (localVideo) {
+            localVideo.srcObject = localStream;
+            localPreview.style.display = 'block';
         }
-        .navbar {
-            box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+
+        // Aktualizuj status
+        const videoTrack = localStream.getVideoTracks()[0];
+        const audioTrack = localStream.getAudioTracks()[0];
+        
+        if (mediaStatus) {
+            mediaStatus.textContent = '✅ Média OK';
+            mediaStatus.classList.remove('status-offline');
+            mediaStatus.classList.add('status-online');
         }
-        .card {
-            box-shadow: 0 2px 10px rgba(0,0,0,0.35);
-            border-radius: 1rem;
-            border: 1px solid #1e293b;
-            background: #020617;
-            color: #e5e7eb;
+
+        if (detailedMediaStatus) {
+            detailedMediaStatus.innerHTML = `
+                ✅ <strong>Kamera:</strong> ${videoTrack.label}<br>
+                ✅ <strong>Mikrofon:</strong> ${audioTrack.label}
+            `;
         }
-        .card-header {
-            border-radius: 1rem 1rem 0 0 !important;
-            background: #020617;
-            border-bottom: 1px solid #1e293b;
+
+        return true;
+
+    } catch (error) {
+        console.error('❌ Chyba při získávání média:', error);
+        
+        let errorMessage = 'Chyba: ';
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+            errorMessage += 'Přístup zamítnut. Povolte kameru a mikrofon.';
+        } else if (error.name === 'NotFoundError') {
+            errorMessage += 'Kamera nebo mikrofon nebyl nalezen.';
+        } else if (error.name === 'NotReadableError') {
+            errorMessage += 'Zařízení je používáno jinou aplikací.';
+        } else {
+            errorMessage += error.message;
         }
-        .vjs-control-bar {
-            font-size: 14px !important;
+
+        if (detailedMediaStatus) {
+            detailedMediaStatus.innerHTML = '❌ ' + errorMessage;
         }
-        #qualityLabel {
-            font-size: 0.9rem;
-            color: #9ca3af;
+        
+        alert(errorMessage);
+        return false;
+    }
+}
+
+// === HLS PLAYER SETUP ===
+function initPlayer() {
+    if (player) {
+        player.dispose();
+        player = null;
+    }
+
+    player = videojs('viewerVideo', {
+        controls: true,
+        autoplay: false,
+        preload: 'auto',
+        fluid: false,
+        liveui: true,
+        html5: {
+            vhs: {
+                enableLowInitialPlaylist: true,
+                smoothQualityChange: true,
+                overrideNative: true
+            }
         }
-        .presenter-badge {
-            width: 8px;
-            height: 8px;
-            border-radius: 999px;
-            background: #22c55e;
-            display: inline-block;
-            margin-right: 6px;
+    });
+
+    player.on('error', function() {
+        const error = player.error();
+        console.error('❌ Player error:', error);
+        showError(`Chyba HLS: ${error.message}`);
+    });
+
+    player.on('loadedmetadata', function() {
+        console.log('✅ HLS metadata načtena');
+        updateQualityOptions();
+    });
+
+    player.on('playing', function() {
+        console.log('▶️ HLS stream běží');
+        hlsLiveBadge.style.display = 'block';
+        qualityLabel.textContent = 'Stream běží...';
+    });
+
+    player.on('pause', function() {
+        hlsLiveBadge.style.display = 'none';
+    });
+
+    console.log('✅ Video.js player inicializován');
+}
+
+// === HLS STREAM LOADING ===
+function loadStream(source) {
+    currentStreamSource = source;
+    
+    let streamUrl;
+    if (source === 'multi') {
+        streamUrl = 'http://localhost:8081/hls/master.m3u8';
+    } else {
+        // Pro single kameru (pokud by byla implementace)
+        streamUrl = `http://localhost:8081/hls/${source}/master.m3u8`;
+    }
+
+    console.log('📡 Načítám HLS stream:', streamUrl);
+    qualityLabel.textContent = 'Načítám...';
+
+    if (!player) {
+        initPlayer();
+    }
+
+    player.src({
+        src: streamUrl,
+        type: 'application/x-mpegURL'
+    });
+
+    player.play().catch(err => {
+        console.error('❌ Chyba při spuštění HLS:', err);
+        showError('Nepodařilo se spustit HLS stream. Klikni PLAY.');
+    });
+}
+
+// === QUALITY SELECTION ===
+function updateQualityOptions() {
+    if (!player || !player.qualityLevels) return;
+
+    const levels = player.qualityLevels();
+    qualitySelect.innerHTML = '<option value="auto">Auto</option>';
+
+    for (let i = 0; i < levels.length; i++) {
+        const level = levels[i];
+        const option = document.createElement('option');
+        option.value = i;
+        option.textContent = `${level.height}p (${Math.round(level.bitrate / 1000)}kbps)`;
+        qualitySelect.appendChild(option);
+    }
+
+    levels.on('change', function() {
+        for (let i = 0; i < levels.length; i++) {
+            if (levels[i].enabled) {
+                qualityLabel.textContent = `Kvalita: ${levels[i].height}p`;
+                break;
+            }
         }
-        .monospace {
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    });
+}
+
+qualitySelect?.addEventListener('change', function() {
+    if (!player || !player.qualityLevels) return;
+
+    const levels = player.qualityLevels();
+    const selectedIndex = this.value;
+
+    if (selectedIndex === 'auto') {
+        for (let i = 0; i < levels.length; i++) {
+            levels[i].enabled = true;
         }
-    </style>
-</head>
+        qualityLabel.textContent = 'Kvalita: Auto';
+    } else {
+        for (let i = 0; i < levels.length; i++) {
+            levels[i].enabled = (i == selectedIndex);
+        }
+    }
+});
 
-<body>
+// === DVR CONTROLS ===
+btnLive?.addEventListener('click', function() {
+    if (player && player.liveTracker) {
+        player.liveTracker.seekToLiveEdge();
+        console.log('⏭️ Přechod na LIVE');
+    }
+});
 
-<nav class="navbar navbar-dark bg-dark mb-4">
-    <div class="container-fluid">
-        <span class="navbar-brand mb-0 h1">MDS – Divák</span>
-        <span id="viewerStatus" class="badge bg-secondary">Nepřihlášen</span>
-    </div>
-</nav>
+btnBack30?.addEventListener('click', function() {
+    if (player) {
+        player.currentTime(Math.max(0, player.currentTime() - 30));
+        console.log('⏪ -30s');
+    }
+});
 
-<div class="container">
+btnBack5min?.addEventListener('click', function() {
+    if (player) {
+        player.currentTime(Math.max(0, player.currentTime() - 300));
+        console.log('⏪ -5min');
+    }
+});
 
-    <div class="row">
-        <!-- Player card -->
-        <div class="col-lg-8 mb-4">
-            <div class="card p-3">
+// === STREAM CONTROLS ===
+playBtn?.addEventListener('click', function() {
+    if (!isLoggedIn) {
+        alert('Nejdřív se přihlaš!');
+        return;
+    }
+    loadStream(streamSelect.value);
+});
 
-                <h4 class="mb-3">Živý stream</h4>
+stopBtn?.addEventListener('click', function() {
+    if (player) {
+        player.pause();
+        hlsLiveBadge.style.display = 'none';
+        qualityLabel.textContent = 'Stream zastaven';
+    }
+});
 
-                <media-controller>
-                <hls-video
-                    src="http://localhost:8081/hls/master.m3u8"
-                    slot="media"
-                    crossorigin
-                    muted
-                ></hls-video>
-                <media-loading-indicator slot="centered-chrome" noautohide></media-loading-indicator>
-                <media-control-bar>
-                    <media-play-button></media-play-button>
-                    <media-seek-backward-button></media-seek-backward-button>
-                    <media-seek-forward-button ></media-seek-forward-button>
-                    <media-mute-button></media-mute-button>
-                    <media-volume-range></media-volume-range>
-                    <media-time-range></media-time-range>
-                    <media-time-display showduration remaining></media-time-display>
-                    <media-playback-rate-button></media-playback-rate-button>
-                    <media-fullscreen-button></media-fullscreen-button>
-                </media-control-bar>
-                </media-controller>
+streamSelect?.addEventListener('change', function() {
+    if (player && !player.paused()) {
+        loadStream(this.value);
+    }
+});
 
-                <div class="mt-3">
-                    <div class="d-flex justify-content-between align-items-center">
+// === LOGIN ===
+joinBtn?.addEventListener('click', async function() {
+    const name = viewerName.value.trim();
+    const code = viewerCode.value.trim();
 
-                        <div>
-                            <button id="btnLive" class="btn btn-danger btn-sm">ŽIVĚ</button>
-                            <button id="btnBack30" class="btn btn-secondary btn-sm">⏪ -30s</button>
-                            <button id="btnBack5min" class="btn btn-secondary btn-sm">⏪ -5min</button>
-                        </div>
+    console.log('🔐 Login pokus...', { name, code });
 
-                        <div class="d-flex align-items-center">
-                            <label class="me-2">Kvalita:</label>
-                            <select id="qualitySelect" class="form-select form-select-sm" style="width: 110px;">
-                                <option value="auto">Auto</option>
-                            </select>
-                        </div>
-                    </div>
+    if (!name) {
+        loginError.textContent = '❌ Zadej jméno';
+        return;
+    }
 
-                    <div id="qualityLabel" class="mt-2">(čekám na stream…)</div>
-                    <div id="viewerError" class="text-danger mt-2"></div>
-                </div>
+    if (!code) {
+        loginError.textContent = '❌ Zadej kód místnosti';
+        return;
+    }
 
-            </div>
-        </div>
+    if (code !== 'mds2025') {
+        loginError.textContent = '❌ Nesprávný kód';
+        return;
+    }
 
-        <div class="card p-3 mt-4">
-            <h5>WebRTC (přímé spojení s presenterem)</h5>
-                <p class="small text-muted">
-                    Toto je separátní demo: video jde přímo z <b>presentera</b> do <b>viewera</b> (WebRTC).
-                </p>
+    // Zobraz loading
+    loginError.textContent = '🔄 Připojuji se...';
+    loginError.style.color = '#667eea';
+    joinBtn.disabled = true;
+    joinBtn.textContent = 'Připojuji se...';
 
-                <video
-                    id="webrtcPlayer"
-                    autoplay
-                    playsinline
-                    controls
-                    style="width: 100%; max-width: 640px; background: #000;"
-                ></video>
+    try {
+        // Vyžádat oprávnění
+        console.log('📹 Vyžadování média permissions...');
+        const granted = await requestMediaPermissions();
+        
+        if (!granted) {
+            loginError.textContent = '❌ Bez oprávnění nelze pokračovat';
+            loginError.style.color = '#dc3545';
+            joinBtn.disabled = false;
+            joinBtn.textContent = 'Připojit se';
+            return;
+        }
 
-                <p class="small text-muted mt-2">
-                    Připojení se naváže po přihlášení diváka a spuštění náhledu na stránce presentera.
-                </p>
-        </div>
+        console.log('✅ Oprávnění získáno');
 
-        <!-- Pravý sloupec: login + seznam přednášejících + nastavení streamu -->
-        <div class="col-lg-4">
+        isLoggedIn = true;
+        loginError.textContent = '✅ Připojeno!';
+        loginError.style.color = '#28a745';
 
-            <!-- „Login“ diváka -->
-            <div class="card p-3 mb-4">
-                <h5>Přihlášení diváka</h5>
-                <div class="mb-3">
-                    <label class="form-label">Jméno:</label>
-                    <input id="viewerName" type="text" class="form-control" placeholder="Např. Martin">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Kód místnosti:</label>
-                    <input id="viewerCode" type="password" class="form-control" placeholder="Např. mds2025">
-                    <div class="form-text text-muted">Demo kód: <span class="monospace">mds2025</span></div>
-                </div>
-                <button id="joinBtn" class="btn btn-primary w-100">Přihlásit</button>
-                <div id="loginError" class="text-danger small mt-2"></div>
-            </div>
-                    <!-- WebRTC P2P náhled (demo) -->
-            <div class="col-lg-8 mb-4">
-                <div class="card p-3 mt-2">
-                    <h4 class="mb-3">WebRTC (přímé spojení s presenterem)</h4>
-                    <p class="small text-muted mb-2">
-                        Toto je separátní demo: video jde přímo z <strong>presentera</strong> do <strong>viewera</strong> (WebRTC).
-                        HLS výše je přes Nginx/FFmpeg.
-                    </p>
-                    <video id="webrtcRemote"
-                        class="w-100 rounded"
-                        playsinline
-                        autoplay
-                        controls></video>
-                    <div class="mt-2 small text-muted">
-                        Připojení se naváže po přihlášení diváka a připojení presentera.
-                    </div>
-                </div>
-            </div>
+        // KRITICKÉ: Přepnout na viewer UI
+        console.log('🔄 Přepínám na viewer UI...');
+        
+        if (loginContainer && viewerContainer) {
+            loginContainer.style.display = 'none';
+            viewerContainer.style.display = 'block';
+            console.log('✅ UI přepnuto');
+        } else {
+            console.error('❌ CHYBA: loginContainer nebo viewerContainer neexistuje!');
+            alert('Chyba: UI elementy nenalezeny!');
+            return;
+        }
 
-            <!-- Přednášející -->
-            <div class="card p-3 mb-4">
-                <h5>Přednášející (podle /stats)</h5>
-                <div id="presenterList" class="mt-2 small">
-                    (Čekám na data ze /stats…)
-                </div>
-            </div>
+        // Aktualizovat status
+        if (viewerStatus) {
+            viewerStatus.textContent = `✅ ${name}`;
+            viewerStatus.classList.remove('status-offline');
+            viewerStatus.classList.add('status-online');
+        }
 
-            <!-- Nastavení streamu -->
-            <div class="card p-3">
-                <h5>Nastavení streamu</h5>
+        console.log('✅ Viewer přihlášen:', name);
 
-                <div class="mt-3">
-                    <label class="form-label">Zdroj streamu:</label>
-                    <select id="streamSelect" class="form-select">
-                        <option value="multi">Multi (master.m3u8)</option>
-                        <option value="single">Single (stream.m3u8)</option>
-                    </select>
-                </div>
+        // Připojit k signaling serveru
+        console.log('🔌 Připojuji k signaling serveru...');
+        connectSignaling();
 
-                <button id="playBtn" class="btn btn-success mt-3 w-100">Přehrát</button>
-                <button id="stopBtn" class="btn btn-outline-danger mt-2 w-100">Stop</button>
-            </div>
-        </div>
+        // Načíst presentery
+        console.log('👥 Načítám presentery...');
+        fetchPresenters();
+        setInterval(fetchPresenters, 5000);
 
-    </div>
+        // Automaticky spustit HLS stream
+        console.log('▶️ Spouštím HLS stream...');
+        setTimeout(() => {
+            loadStream('multi');
+        }, 1000);
 
-</div>
+    } catch (error) {
+        console.error('❌ Login error:', error);
+        loginError.textContent = '❌ Chyba při přihlášení: ' + error.message;
+        loginError.style.color = '#dc3545';
+        joinBtn.disabled = false;
+        joinBtn.textContent = 'Připojit se';
+    }
+});
 
-<!-- Bootstrap JS -->
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+// === FETCH PRESENTERS ===
+async function fetchPresenters() {
+    try {
+        const response = await fetch('http://localhost:8081/stats');
+        const xmlText = await response.text();
+        
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+        const streams = xmlDoc.querySelectorAll('stream');
+        
+        const presentersHTML = [];
+        streams.forEach(stream => {
+            const name = stream.querySelector('name')?.textContent || '';
+            const nclients = stream.querySelector('nclients')?.textContent || '0';
 
-<!-- Video.js -->
-<script src="https://vjs.zencdn.net/8.10.0/video.min.js"></script>
+            if (name.match(/^cam[1-6]$/)) {
+                presentersHTML.push(
+                    `<div style="padding: 5px 0;">
+                        <span style="color: #28a745;">●</span> ${name} (${nclients})
+                    </div>`
+                );
+            }
+        });
 
-<!-- Hls.js (klidně tu může zůstat, i když aktuální kód ho přímo nepoužívá) -->
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+        if (presentersHTML.length === 0) {
+            presenterList.innerHTML = '<div style="color: #999;">Žádní aktivní</div>';
+        } else {
+            presenterList.innerHTML = presentersHTML.join('');
+        }
 
-<!-- Tvůj JS -->
-<script src="./viewer.js"></script>
+    } catch (err) {
+        console.error('❌ Chyba /stats:', err);
+        presenterList.innerHTML = '<div style="color: #dc3545;">Chyba</div>';
+    }
+}
 
-</body>
-</html>
+// === WEBRTC SIGNALING ===
+function connectSignaling() {
+    ws = new WebSocket(SIGNALING_URL);
+
+    ws.onopen = () => {
+        console.log('🔌 WS: připojeno');
+        ws.send(JSON.stringify({
+            type: 'join',
+            role: 'viewer'
+        }));
+    };
+
+    ws.onmessage = async (event) => {
+        let msg;
+        try {
+            msg = JSON.parse(event.data);
+        } catch (e) {
+            console.error('❌ Nevalidní WS zpráva');
+            return;
+        }
+
+        console.log('📨 WS:', msg.type);
+
+        switch (msg.type) {
+            case 'joined':
+                console.log(`✅ Joined as ${msg.role}`);
+                break;
+
+            case 'offer':
+                if (msg.sdp) {
+                    console.log('📥 Dostal jsem offer od presentera');
+                    await handleOffer(msg.sdp);
+                }
+                break;
+
+            case 'ice':
+                if (msg.candidate && pc) {
+                    try {
+                        await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                    } catch (e) {
+                        console.error('❌ ICE candidate error:', e);
+                    }
+                }
+                break;
+        }
+    };
+
+    ws.onclose = () => {
+        console.log('🔌 WS: odpojeno');
+    };
+
+    ws.onerror = (err) => {
+        console.error('❌ WS error:', err);
+    };
+}
+
+// === WEBRTC OFFER HANDLING ===
+async function handleOffer(sdp) {
+    if (pc) {
+        pc.close();
+    }
+
+    pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    });
+
+    // Přidat local stream
+    if (localStream) {
+        localStream.getTracks().forEach(track => {
+            pc.addTrack(track, localStream);
+            console.log('➕ Local track:', track.kind);
+        });
+    }
+
+    pc.onicecandidate = (event) => {
+        if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'ice',
+                role: 'viewer',
+                candidate: event.candidate
+            }));
+        }
+    };
+
+    pc.ontrack = (event) => {
+        console.log('📺 WebRTC: dostal jsem track od presentera:', event.track.kind);
+        const [stream] = event.streams;
+        if (webrtcRemote) {
+            webrtcRemote.srcObject = stream;
+            webrtcPlaceholder.style.display = 'none';
+            webrtcLiveBadge.style.display = 'block';
+        }
+    };
+
+    pc.onconnectionstatechange = () => {
+        console.log('🔗 WebRTC state:', pc.connectionState);
+        
+        if (pc.connectionState === 'connected') {
+            webrtcLiveBadge.style.display = 'block';
+            webrtcPlaceholder.style.display = 'none';
+        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+            webrtcLiveBadge.style.display = 'none';
+            webrtcPlaceholder.style.display = 'block';
+        }
+    };
+
+    try {
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        ws.send(JSON.stringify({
+            type: 'answer',
+            sdp: pc.localDescription
+        }));
+
+        console.log('✅ WebRTC: answer odeslána');
+    } catch (e) {
+        console.error('❌ WebRTC handshake error:', e);
+    }
+}
+
+// === ERROR DISPLAY ===
+function showError(message) {
+    viewerError.textContent = message;
+    viewerError.style.display = 'block';
+    setTimeout(() => {
+        viewerError.style.display = 'none';
+    }, 5000);
+}
+
+// === INIT ===
+window.addEventListener('load', () => {
+    console.log('🚀 Viewer inicializován');
+    initPlayer();
+});
+
+// === CLEANUP ===
+window.addEventListener('beforeunload', () => {
+    if (player) player.dispose();
+    if (pc) pc.close();
+    if (ws) ws.close();
+    if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+    }
+});
